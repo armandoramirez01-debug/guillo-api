@@ -1,120 +1,84 @@
 """
-guillo_api.py
-=============
-API FastAPI para las skills de Guillo.
-Se despliega en Render.com de forma gratuita.
-n8n llama a este endpoint para ejecutar las skills.
+guillo_api.py — Flask API para skills de Guillo
 """
 import os
 import json
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Any
+from flask import Flask, request, jsonify
 
-# Importar skills
-import sys
-sys.path.insert(0, os.path.dirname(__file__))
-
-app = FastAPI(title="Guillo Skills API", version="1.0.0")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# ── Modelos ────────────────────────────────────────────────────────────────
-
-class SkillRequest(BaseModel):
-    skill: str
-    params: dict = {}
-    telefono: Optional[str] = None
-
-class MensajeRequest(BaseModel):
-    telefono: str
-    rol: str
-    mensaje: str
-    lead_id: Optional[int] = None
-
-class HistorialRequest(BaseModel):
-    telefono: str
-    limite: Optional[int] = 20
-
-# ── DB Connection ──────────────────────────────────────────────────────────
+app = Flask(__name__)
 
 def get_conn():
     import psycopg2
     return psycopg2.connect(os.environ["DATABASE_URL"])
 
-
-# ── Endpoints ──────────────────────────────────────────────────────────────
-
-@app.get("/")
+@app.route("/")
 def root():
-    return {"status": "Guillo Skills API activa", "version": "1.0.0"}
+    return jsonify({"status": "Guillo Skills API activa", "version": "1.0.0"})
 
-@app.get("/health")
+@app.route("/health")
 def health():
     try:
         conn = get_conn()
         conn.close()
-        return {"status": "ok", "db": "connected"}
+        return jsonify({"status": "ok", "db": "connected"})
     except Exception as e:
-        return {"status": "error", "db": str(e)}
+        return jsonify({"status": "error", "db": str(e)}), 500
 
-@app.post("/ejecutar")
-def ejecutar_skill(req: SkillRequest):
-    """Ejecuta cualquier skill de Guillo."""
+@app.route("/ejecutar", methods=["POST"])
+def ejecutar_skill():
+    data = request.get_json()
+    skill_name = data.get("skill", "")
+    params = data.get("params", {})
+    if isinstance(params, str):
+        try:
+            params = json.loads(params)
+        except:
+            params = {}
+    telefono = data.get("telefono")
+    if telefono and "telefono" not in params:
+        params["telefono"] = telefono
     from guillo_skills import ejecutar_skill as _ejecutar
-    # Agregar teléfono a params si viene
-    params = req.params.copy()
-    if req.telefono and "telefono" not in params:
-        params["telefono"] = req.telefono
-    result = _ejecutar(req.skill, params)
-    return result
+    result = _ejecutar(skill_name, params)
+    return jsonify(result)
 
-@app.post("/historial")
-def obtener_historial(req: HistorialRequest):
-    """Obtiene historial de conversación por teléfono."""
+@app.route("/historial", methods=["POST"])
+def obtener_historial():
+    data = request.get_json()
     from guillo_skills import skill_obtener_historial
-    return skill_obtener_historial(req.telefono, req.limite)
+    return jsonify(skill_obtener_historial(
+        data.get("telefono", ""), data.get("limite", 20)
+    ))
 
-@app.post("/guardar_mensaje")
-def guardar_mensaje(req: MensajeRequest):
-    """Guarda un mensaje en el historial."""
+@app.route("/guardar_mensaje", methods=["POST"])
+def guardar_mensaje():
+    data = request.get_json()
     from guillo_skills import skill_guardar_mensaje
-    return skill_guardar_mensaje(req.telefono, req.rol, req.mensaje, req.lead_id)
+    return jsonify(skill_guardar_mensaje(
+        data.get("telefono", ""), data.get("rol", ""),
+        data.get("mensaje", ""), data.get("lead_id")
+    ))
 
-@app.get("/leads")
+@app.route("/leads")
 def listar_leads():
-    """Lista todos los leads activos."""
     conn = get_conn()
     cur = conn.cursor()
     cur.execute("""
         SELECT id, nombre, empresa, telefono, ciudad,
-               urgencia, score, potencial_facturacion,
-               estado, creado
-        FROM leads
-        ORDER BY score DESC, creado DESC
-        LIMIT 50
+               urgencia, score, potencial_facturacion, estado, creado
+        FROM leads ORDER BY score DESC, creado DESC LIMIT 50
     """)
     cols = [d[0] for d in cur.description]
     rows = [dict(zip(cols, r)) for r in cur.fetchall()]
-    conn.close()
-    # Convert datetime to string
     for r in rows:
-        if r.get("creado"):
-            r["creado"] = str(r["creado"])
-    return {"leads": rows, "total": len(rows)}
+        if r.get("creado"): r["creado"] = str(r["creado"])
+    conn.close()
+    return jsonify({"leads": rows, "total": len(rows)})
 
-@app.get("/leads/{lead_id}/reporte")
-def reporte_lead(lead_id: int):
-    """Genera el reporte completo de un lead."""
+@app.route("/leads/<int:lead_id>/reporte")
+def reporte_lead(lead_id):
     from guillo_skills import skill_generar_reporte
-    return skill_generar_reporte(lead_id)
+    return jsonify(skill_generar_reporte(lead_id))
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("PORT", 8000)))
+    port = int(os.environ.get("PORT", 8000))
+    app.run(host="0.0.0.0", port=port)
