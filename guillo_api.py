@@ -24,6 +24,39 @@ def health():
     except Exception as e:
         return jsonify({"status": "error", "db": str(e)}), 500
 
+# ── Verificación de webhook Meta WhatsApp ─────────────────────────────────
+@app.route("/webhook", methods=["GET"])
+def verificar_webhook():
+    """Meta llama a este endpoint con GET para verificar el webhook."""
+    mode      = request.args.get("hub.mode")
+    token     = request.args.get("hub.verify_token")
+    challenge = request.args.get("hub.challenge")
+
+    VERIFY_TOKEN = os.environ.get("VERIFY_TOKEN", "guillo2026")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return challenge, 200
+    return "Forbidden", 403
+
+@app.route("/webhook", methods=["POST"])
+def recibir_mensaje():
+    """Meta envía mensajes de WhatsApp a este endpoint."""
+    data = request.get_json()
+    # Reenviar a n8n
+    import urllib.request
+    n8n_url = os.environ.get("N8N_URL", "https://guillo.app.n8n.cloud/webhook/guillo-whatsapp")
+    req = urllib.request.Request(
+        n8n_url,
+        data=json.dumps(data).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST"
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        print(f"Error forwarding to n8n: {e}")
+    return jsonify({"status": "ok"}), 200
+
 @app.route("/ejecutar", methods=["POST"])
 def ejecutar_skill():
     data = request.get_json()
